@@ -1,3 +1,4 @@
 streamlit
-spacy
-sqlite3-bro
+spacy==3.8.2
+pandas
+requests
