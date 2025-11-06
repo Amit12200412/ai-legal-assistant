@@ -4,19 +4,14 @@ import spacy
 import random
 # --- at top of app.py, after imports ---
 import os
-from spacy.cli import download as spacy_download
 
 try:
     nlp = spacy.load("en_core_web_sm")
 except OSError:
-    # Download model if not available (safe on Streamlit Cloud)
-    spacy_download("en_core_web_sm")
+    from spacy.cli import download
+    download("en_core_web_sm")
     nlp = spacy.load("en_core_web_sm")
-# --- rest of your code uses `nlp` as before ---
 
-
-# Load English model for NLP
-nlp = spacy.load("en_core_web_sm")
 
 # ---------------------------
 # DATABASE FUNCTIONS
