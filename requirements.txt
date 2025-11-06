@@ -1,4 +1,6 @@
-streamlit
-spacy==3.8.2
+streamlit==1.37.0
+spacy==3.7.4
+sqlite-utils
 pandas
+nltk
 requests
