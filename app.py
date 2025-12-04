@@ -1,249 +1,241 @@
+# app.py
 import streamlit as st
 import sqlite3
+import hashlib
 import spacy
 import random
-# --- at top of app.py, after imports ---
-import os
+from datetime import datetime
+from fpdf import FPDF
+import io
+import base64
+import json
 
-try:
-    nlp = spacy.load("en_core_web_sm")
-except OSError:
-    from spacy.cli import download
-    download("en_core_web_sm")
-    nlp = spacy.load("en_core_web_sm")
+# -----------------------------
+# Config / Constants
+# -----------------------------
+DB_PATH = "users.db"
+SPACY_MODEL = "en_core_web_sm"
 
+# -----------------------------
+# JSON Safe Loader (ADDED)
+# -----------------------------
+def safe_json_loads(text):
+    """Prevents JSON crashes from invalid DB entries."""
+    if not text or (isinstance(text, str) and text.strip() == ""):
+        return []
+    try:
+        return json.loads(text)
+    except Exception:
+        return text  # return original string if invalid JSON
 
-# ---------------------------
-# DATABASE FUNCTIONS
-# ---------------------------
+# -----------------------------
+# Load NLP
+# -----------------------------
+nlp = spacy.load(SPACY_MODEL)
 
+# -----------------------------
+# Multi-language texts (EN/HI/MR)
+# -----------------------------
+LANG_TEXTS = {
+    "en": {
+        "app_title": "⚖️ AI Legal Assistant",
+        "login": "Login",
+        "signup": "Sign Up",
+        "username": "Username",
+        "password": "Password",
+        "create_account": "Create Account",
+        "submit": "Submit",
+        "logout": "Logout",
+        "nav_menu": "Navigation",
+        "legal_query": "Enter your legal query",
+        "analyze": "Analyze",
+        "generate_doc": "Generate Document",
+        "doc_type": "Document Type",
+        "name": "Your Name",
+        "address": "Your Address",
+        "mobile": "Mobile Number",
+        "against": "Against Whom (Name / Company)",
+        "details": "Incident Details (editable)",
+        "download_pdf": "Download PDF",
+        "history": "History",
+        "upload_doc": "Upload a TXT Document",
+        "check_doc": "Check Document",
+        "chatbot": "Chatbot",
+        "suggestions": "Query Suggestions",
+        "category": "Category",
+        "filter_suggestions": "Filter suggestions",
+        "dark_mode": "Dark Mode",
+        "language": "Language"
+    },
+    "hi": {
+        "app_title": "⚖️ एआई विधिक सहायक",
+        "login": "लॉगिन",
+        "signup": "साइन अप",
+        "username": "उपयोगकर्ता नाम",
+        "password": "पासवर्ड",
+        "create_account": "खाता बनाएँ",
+        "submit": "जमा करें",
+        "logout": "लॉग आउट",
+        "nav_menu": "नेविगेशन",
+        "legal_query": "अपना कानूनी प्रश्न दर्ज करें",
+        "analyze": "विश्लेषण करें",
+        "generate_doc": "दस्तावेज़ बनाएँ",
+        "doc_type": "दस्तावेज़ प्रकार",
+        "name": "आपका नाम",
+        "address": "आपका पता",
+        "mobile": "मोबाइल नंबर",
+        "against": "जिसके खिलाफ (नाम / कंपनी)",
+        "details": "घटना का विवरण (संपादन योग्य)",
+        "download_pdf": "PDF डाउनलोड करें",
+        "history": "इतिहास",
+        "upload_doc": "TXT दस्तावेज़ अपलोड करें",
+        "check_doc": "दस्तावेज़ जांचें",
+        "chatbot": "चैटबॉट",
+        "suggestions": "प्रश्न सुझाव",
+        "category": "श्रेणी",
+        "filter_suggestions": "सुझाव फ़िल्टर करें",
+        "dark_mode": "डार्क मोड",
+        "language": "भाषा"
+    },
+    "mr": {
+        "app_title": "⚖️ एआय विधी सहाय्यक",
+        "login": "⚖️ एआई विधिक सहाय्यक",
+        "signup": "साइन अप",
+        "username": "वापरकर्ता नाव",
+        "password": "पासवर्ड",
+        "create_account": "खाते तयार करा",
+        "submit": "सबमिट करा",
+        "logout": "लॉगआउट",
+        "nav_menu": "नेव्हिगेशन",
+        "legal_query": "आपला कायदेशीर प्रश्न लिहा",
+        "analyze": "विश्लेषण करा",
+        "generate_doc": "दस्तऐवज तयार करा",
+        "doc_type": "दस्तऐवज प्रकार",
+        "name": "आपले नाव",
+        "address": "आपला पत्ता",
+        "mobile": "मोबाईल क्रमांक",
+        "against": "ज्यांच्याविरुद्ध (नाव / कंपनी)",
+        "details": "घटनेचे तपशील (संपादन करण्यायोग्य)",
+        "download_pdf": "PDF डाउनलोड करा",
+        "history": "इतिहास",
+        "upload_doc": "TXT दस्तऐवज अपलोड करा",
+        "check_doc": "दस्तऐवज तपासा",
+        "chatbot": "चॅटबॉट",
+        "suggestions": "प्रश्न सूचना",
+        "category": "वर्ग",
+        "filter_suggestions": "सूचना फिल्टर करा",
+        "dark_mode": "डार्क मोड",
+        "language": "भाषा"
+    }
+}
+
+# -----------------------------
+# IPC mapping for detection
+# -----------------------------
+IPC_SECTIONS = {
+    "theft": ("IPC 378", "Theft — punishment may extend to 3 years and/or fine."),
+    "murder": ("IPC 302", "Murder — punishment may include life imprisonment or death."),
+    "fraud": ("IPC 420", "Cheating and dishonesty."),
+    "accident": ("IPC 279", "Rash driving or negligent conduct causing danger."),
+    "assault": ("IPC 351", "Assault or criminal force."),
+    "rape": ("IPC 376", "Rape — severe sexual offence."),
+    "property": ("Civil Property Matter", "Disputes related to property, title and ownership.")
+}
+
+# -----------------------------
+# Utilities: DB initialization
+# -----------------------------
 def init_db():
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users(
-                    username TEXT PRIMARY KEY,
-                    password TEXT NOT NULL,
-                    lang TEXT
-                )''')
+    # users
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            lang TEXT
+        )
+        """
+    )
+    # history (queries)
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            query TEXT,
+            actions TEXT,
+            proofs TEXT,
+            win INTEGER,
+            ipc TEXT,
+            ts TEXT
+        )
+        """
+    )
+    # pdf storage (filename, bytes, metadata)
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pdfs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            filename TEXT,
+            file blob,
+            doc_type TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    # chatbot logs (optional)
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            role TEXT,
+            message TEXT,
+            ts TEXT
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
-def create_user(username, password, lang=None):
+# -----------------------------
+# Auth helpers
+# -----------------------------
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def create_user(username: str, password: str, lang: str = "en"):
     try:
-        conn = sqlite3.connect('users.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute('INSERT INTO users(username, password, lang) VALUES (?, ?, ?)', (username, password, lang))
+        c.execute("INSERT INTO users(username, password, lang) VALUES (?, ?, ?)",
+                  (username, hash_password(password), lang))
         conn.commit()
         conn.close()
         return True, None
     except Exception as e:
         return False, str(e)
 
-def login_user(username, password):
-    conn = sqlite3.connect('users.db')
+def login_user(username: str, password: str):
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('SELECT * FROM users WHERE username=? AND password=?', (username, password))
-    data = c.fetchone()
+    c.execute("SELECT username, lang FROM users WHERE username=? AND password=?",
+              (username, hash_password(password)))
+    row = c.fetchone()
     conn.close()
-    return data
+    return row
 
-# ---------------------------
-# LANGUAGE TEXTS
-# ---------------------------
-
-LANG_TEXTS = {
-    "en": {
-        "title": "⚖️ AI Legal Assistant",
-        "login": "Login",
-        "signup": "Sign Up",
-        "username": "Username",
-        "password": "Password",
-        "lang_select": "Select Your Preferred Language",
-        "submit": "Submit",
-        "query": "Enter your legal query below:",
-        "analyze": "Analyze Query",
-        "dashboard": "Your Legal Dashboard",
-        "proofs": "Required Proofs",
-        "actions": "Recommended Actions",
-        "win": "Estimated Win Percentage",
-        "upload_doc": "Upload a Legal Document to Check Mistakes",
-        "mistake_result": "Mistake Check Result:",
-        "logout": "Logout"
-    },
-    "hi": {
-        "title": "⚖️ एआई विधिक सहायक",
-        "login": "लॉगिन करें",
-        "signup": "साइन अप करें",
-        "username": "उपयोगकर्ता नाम",
-        "password": "पासवर्ड",
-        "lang_select": "अपनी पसंदीदा भाषा चुनें",
-        "submit": "जमा करें",
-        "query": "अपना कानूनी प्रश्न नीचे दर्ज करें:",
-        "analyze": "प्रश्न का विश्लेषण करें",
-        "dashboard": "आपका विधिक डैशबोर्ड",
-        "proofs": "आवश्यक साक्ष्य",
-        "actions": "अनुशंसित कार्रवाइयाँ",
-        "win": "अनुमानित जीत प्रतिशत",
-        "upload_doc": "गलतियाँ जांचने के लिए दस्तावेज़ अपलोड करें",
-        "mistake_result": "गलती जांच परिणाम:",
-        "logout": "लॉग आउट"
-    },
-    "mr": {
-        "title": "⚖️ एआय विधी सहाय्यक",
-        "login": "लॉगिन करा",
-        "signup": "साइन अप करा",
-        "username": "वापरकर्ता नाव",
-        "password": "संकेतशब्द",
-        "lang_select": "आपली आवडती भाषा निवडा",
-        "submit": "सबमिट करा",
-        "query": "आपला कायदेशीर प्रश्न खाली लिहा:",
-        "analyze": "प्रश्नाचे विश्लेषण करा",
-        "dashboard": "आपले विधी डॅशबोर्ड",
-        "proofs": "आवश्यक पुरावे",
-        "actions": "शिफारस केलेली पावले",
-        "win": "अंदाजे जिंकण्याचे प्रमाण",
-        "upload_doc": "चुका तपासण्यासाठी दस्तऐवज अपलोड करा",
-        "mistake_result": "चुका तपास परिणाम:",
-        "logout": "लॉगआउट"
-    }
-}
-
-# ---------------------------
-# HELPER FUNCTIONS
-# ---------------------------
-
-def analyze_legal_query(query):
-    doc = nlp(query)
-    keywords = [token.text.lower() for token in doc if token.pos_ in ['NOUN', 'VERB']]
-    actions, proofs = [], []
-
-    if "accident" in keywords:
-        actions.append("File an FIR at the nearest police station.")
-        proofs.append("Vehicle documents, driving license, medical reports.")
-    elif "theft" in keywords:
-        actions.append("Report to police and provide CCTV footage if available.")
-        proofs.append("FIR copy, ownership proof, CCTV footage.")
-    elif "property" in keywords:
-        actions.append("Verify property documents and ownership title.")
-        proofs.append("Sale deed, tax receipts, property map.")
-    else:
-        actions.append("Consult a lawyer for detailed advice.")
-        proofs.append("Relevant legal documents or evidence.")
-
-    win_percentage = random.randint(50, 95)
-    return actions, proofs, win_percentage
-
-def check_document_for_mistakes(file):
-    content = file.read().decode("utf-8")
-    mistakes = []
-    if "???" in content or len(content) < 50:
-        mistakes.append("Document seems incomplete or has placeholders.")
-    if "lorem" in content.lower():
-        mistakes.append("Contains dummy text; replace with actual legal text.")
-    if not mistakes:
-        return "✅ No major mistakes found."
-    return "⚠️ " + " | ".join(mistakes)
-
-# ---------------------------
-# MAIN APP
-# ---------------------------
-
-def main():
-    init_db()
-
-    # Check if user already logged in
-    if "user" in st.session_state:
-        lang_code = st.session_state.get("lang", "en")
-        L = LANG_TEXTS[lang_code]
-        show_dashboard(L)
-        return
-
-    # Sidebar Navigation
-    st.sidebar.title("Navigation")
-    option = st.sidebar.radio("Choose Option", ["Login", "Sign Up"])
-
-    # Language Selection
-    st.title("🌐 Language Selection")
-    lang_choice = st.selectbox("Select Language", ["English", "हिंदी", "मराठी"])
-    lang_code = "en" if lang_choice == "English" else "hi" if lang_choice == "हिंदी" else "mr"
-    L = LANG_TEXTS[lang_code]
-
-    st.title(L["title"])
-
-    # Signup Section
-    if option == "Sign Up":
-        st.subheader(L["signup"])
-        new_user = st.text_input(L["username"])
-        new_pwd = st.text_input(L["password"], type="password")
-        if st.button(L["submit"]):
-            ok, err = create_user(new_user, new_pwd, lang_code)
-            if ok:
-                st.success("✅ Account created successfully! Please login.")
-            else:
-                st.error(f"Error: {err}")
-
-    # Login Section
-    elif option == "Login":
-        st.subheader(L["login"])
-        username = st.text_input(L["username"])
-        password = st.text_input(L["password"], type="password")
-        if st.button(L["submit"]):
-            user = login_user(username, password)
-            if user:
-                st.session_state["user"] = user
-                st.session_state["lang"] = user[2] or lang_code
-                st.success(f"Welcome {username} 👋")
-                st.rerun()
-
-            else:
-                st.error("❌ Invalid credentials!")
-
-def show_dashboard(L):
-    st.subheader(L["dashboard"])
-
-    # Input area
-    query = st.text_area(L["query"], key="query_input")
-
-    # Analyze button
-    if st.button(L["analyze"]):
-        if query.strip() == "":
-            st.warning("⚠️ Please enter a valid legal query.")
-        else:
-            actions, proofs, win = analyze_legal_query(query)
-            st.session_state["result"] = {
-                "actions": actions,
-                "proofs": proofs,
-                "win": win
-            }
-
-    # Show previous analysis result if exists
-    if "result" in st.session_state:
-        result = st.session_state["result"]
-        st.write(f"### {L['actions']}:")
-        for a in result["actions"]:
-            st.write(f"- {a}")
-
-        st.write(f"### {L['proofs']}:")
-        for p in result["proofs"]:
-            st.write(f"- {p}")
-
-        st.metric(L["win"], f"{result['win']}%")
-
-    # Upload file section
-    st.write("---")
-    uploaded_file = st.file_uploader(L["upload_doc"], type=["txt"])
-    if uploaded_file:
-        result = check_document_for_mistakes(uploaded_file)
-        st.info(f"{L['mistake_result']} {result}")
-
-    st.write("---")
-    if st.button(L["logout"]):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.experimental_rerun()
-
-
-
-if __name__ == "__main__":
-    main()
-
+# -----------------------------
+# Persisting helpers
+# -----------------------------
+def save_history(username, query, actions, proofs, win, ipc):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    # ensure we store JSON strings for lists
+    try:
+        actions_json = json.dumps(actions)
+    except:
+        actions_json = json.dumps([str(actions)])
